@@ -36,7 +36,8 @@ class TimeSeries(list):
     self.consolidationFunc = consolidate
     self.valuesPerPoint = 1
     self.options = {}
-
+    self.aggregationMethod = 'average'
+    self.finestStep = step
 
   def __iter__(self):
     if self.valuesPerPoint > 1:
@@ -239,6 +240,12 @@ def fetchData(requestContext, pathExpr):
     (timeInfo,values) = results
     (start,end,step) = timeInfo
     series = TimeSeries(dbFile.metric_path, start, end, step, values)
+    try:
+      info = dbFile.getInfo()
+      series.aggregationMethod = info['aggregationMethod']
+      series.finestStep = info['archives'][0]['secondsPerPoint']
+    except AttributeError:
+      pass
     series.pathExpression = pathExpr #hack to pass expressions through to render functions
     seriesList.append(series)
 
