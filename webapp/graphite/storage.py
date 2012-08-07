@@ -298,6 +298,9 @@ class WhisperFile(Leaf):
     (timeInfo,values) = whisper.fetch(self.fs_path, startTime, endTime)
     return (timeInfo,values)
 
+  def getInfo(self):
+    return whisper.info(self.fs_path)    
+
   @property
   def context(self):
     if self.cached_context_data is not None:

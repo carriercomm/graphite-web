@@ -2109,6 +2109,12 @@ def summarize(requestContext, seriesList, intervalString, func='sum', alignToFro
   for series in seriesList:
     buckets = {}
 
+    if series.aggregationMethod == 'average' and \
+       series.finestStep != series.step:
+      upscale = lambda x: x * (series.step/series.finestStep)
+    else:
+      upscale = lambda x: x
+
     timestamps = range( int(series.start), int(series.end), int(series.step) )
     datapoints = zip(timestamps, series)
 
@@ -2122,7 +2128,7 @@ def summarize(requestContext, seriesList, intervalString, func='sum', alignToFro
         buckets[bucketInterval] = []
 
       if value is not None:
-        buckets[bucketInterval].append(value)
+        buckets[bucketInterval].append(upscale(value))
 
     if alignToFrom:
       newStart = series.start
