@@ -131,13 +131,14 @@ def find_view(request):
           query_parts[i] = '{%s}' % part
       query = '.'.join(query_parts)
 
+  start = time.time()
   try:
     matches = list( store.find(query) )
   except:
     log.exception()
     raise
 
-  log.info('find_view query=%s local_only=%s matches=%d' % (query, local_only, len(matches)))
+  log.info('find_view query=%s local_only=%s matches=%d time=%s' % (query, local_only, len(matches), time.time() - start))
   matches.sort(key=lambda node: node.name)
 
   if format == 'treejson':
