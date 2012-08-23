@@ -250,6 +250,7 @@ class Node:
     self.metric_path = str(metric_path)
     self.real_metric = str(metric_path)
     self.name = self.metric_path.split('.')[-1]
+    self.is_remote = False
 
   def getIntervals(self):
     return []

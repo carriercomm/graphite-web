@@ -105,6 +105,7 @@ class RemoteNode:
     self.real_metric = metric_path
     self.name = metric_path.split('.')[-1]
     self.__isLeaf = isLeaf
+    self.is_remote = True
 
 
   def fetch(self, startTime, endTime):
