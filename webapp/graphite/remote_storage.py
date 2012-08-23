@@ -4,6 +4,7 @@ import httplib
 from urllib import urlencode
 from django.core.cache import cache
 from django.conf import settings
+from graphite.logger import log
 from graphite.render.hashing import compactHash
 
 try:
@@ -11,7 +12,11 @@ try:
 except ImportError:
   import pickle
 
-
+try:
+  import urllib3
+  HAS_CONN_POOLING = True
+except:
+  HAS_CONN_POOLING = False
 
 class RemoteStore(object):
   lastFailure = 0.0
@@ -20,6 +25,10 @@ class RemoteStore(object):
 
   def __init__(self, host):
     self.host = host
+    if HAS_CONN_POOLING:
+      self.pool = urllib3.HTTPConnectionPool(host, maxsize=10, timeout=30, block=False)
+    else:
+      self.pool = None
 
 
   def find(self, query):
@@ -50,8 +59,9 @@ class FindRequest:
     if self.cachedResults:
       return
 
-    self.connection = HTTPConnectionWithTimeout(self.store.host)
-    self.connection.timeout = settings.REMOTE_STORE_FIND_TIMEOUT
+    if not HAS_CONN_POOLING:
+      self.connection = HTTPConnectionWithTimeout(self.store.host)
+      self.connection.timeout = settings.REMOTE_STORE_FIND_TIMEOUT
 
     query_params = [
       ('local', '1'),
@@ -61,8 +71,12 @@ class FindRequest:
     query_string = urlencode(query_params)
 
     try:
-      self.connection.request('GET', '/metrics/find/?' + query_string)
+      if HAS_CONN_POOLING:
+        self.connection = self.store.pool.request('GET', '/metrics/find/?' + query_string)
+      else:
+        self.connection.request('GET', '/metrics/find/?' + query_string)
     except:
+      log.exception()
       self.store.fail()
       if not self.suppressErrors:
         raise
@@ -76,12 +90,19 @@ class FindRequest:
       self.send()
 
     try:
-      response = self.connection.getresponse()
+      if HAS_CONN_POOLING:
+        response = self.connection
+      else:
+        response = self.connection.getresponse()
       assert response.status == 200, "received error response %s - %s" % (response.status, response.reason)
-      result_data = response.read()
+      if HAS_CONN_POOLING:
+        result_data = response.data
+      else:
+        result_data = response.read()
       results = pickle.loads(result_data)
 
     except:
+      log.exception()
       self.store.fail()
       if not self.suppressErrors:
         raise
@@ -121,12 +142,19 @@ class RemoteNode:
     ]
     query_string = urlencode(query_params)
 
-    connection = HTTPConnectionWithTimeout(self.store.host)
-    connection.timeout = settings.REMOTE_STORE_FETCH_TIMEOUT
-    connection.request('GET', '/render/?' + query_string)
-    response = connection.getresponse()
+    if HAS_CONN_POOLING:
+      connection = self.store.pool
+    else:
+      connection = HTTPConnectionWithTimeout(self.store.host)
+      connection.timeout = settings.REMOTE_STORE_FETCH_TIMEOUT
+    response = connection.request('GET', '/render/?' + query_string)
+    if not HAS_CONN_POOLING:
+      response = connection.getresponse()
     assert response.status == 200, "Failed to retrieve remote data: %d %s" % (response.status, response.reason)
-    rawData = response.read()
+    if HAS_CONN_POOLING:
+      rawData = response.data
+    else:
+      rawData = response.read()
 
     seriesList = pickle.loads(rawData)
     assert len(seriesList) == 1, "Invalid result: seriesList=%s" % str(seriesList)
