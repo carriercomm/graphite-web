@@ -136,7 +136,12 @@ def find(root_dir, pattern):
   clean_pattern = pattern.replace('\\', '')
   pattern_parts = clean_pattern.split('.')
 
-  for absolute_path in _find(root_dir, pattern_parts):
+  if local_finder and root_dir == settings.WHISPER_DIR:
+    finder_generator = local_finder._find(root_dir, pattern_parts)
+  else:
+    finder_generator = _find(root_dir, pattern_parts)
+
+  for absolute_path in finder_generator:
 
     if DATASOURCE_DELIMETER in basename(absolute_path):
       (absolute_path,datasource_pattern) = absolute_path.rsplit(DATASOURCE_DELIMETER,1)
@@ -412,3 +417,9 @@ class RRDDataSource(Leaf):
 # Exposed Storage API
 LOCAL_STORE = Store(settings.DATA_DIRS)
 STORE = Store(settings.DATA_DIRS, remote_hosts=settings.CLUSTER_SERVERS)
+
+if exists(settings.INDEX_FILE + '.local'):
+  import graphite.metrics.search
+  local_finder = graphite.metrics.search.IndexSearcher(settings.INDEX_FILE + '.local')
+else:
+  local_finder = None
