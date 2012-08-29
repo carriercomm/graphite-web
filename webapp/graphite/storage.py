@@ -19,8 +19,19 @@ try:
 except ImportError:
   import pickle
 
+if settings.USE_LOCAL_STORAGE_CACHE:
+  try:
+    import ordereddict
+    local_cache = ordereddict.OrderedDict()
+  except ImportError:
+    local_cache = None
+else:
+  local_cache = None
+
 
 DATASOURCE_DELIMETER = '::RRD_DATASOURCE::'
+LOCAL_CACHE_SIZE = 1000
+LOCAL_CACHE_EXPIRES = settings.REMOTE_FIND_CACHE_DURATION
 
 
 
@@ -182,13 +193,29 @@ def _find(current_dir, patterns):
   match the corresponding pattern in patterns"""
   pattern = patterns[0]
   patterns = patterns[1:]
-  entries = os.listdir(current_dir)
 
-  subdirs = [e for e in entries if isdir( join(current_dir,e) )]
+  if local_cache != None:
+    try:
+      subdirs, files, timestamp = local_cache[current_dir]
+      if time.time() - timestamp > LOCAL_CACHE_EXPIRES:
+        cached = False
+      else:
+        cached = True
+    except KeyError:
+      cached = False
+  else:
+    cached = False
+
+  if not cached:
+    entries = os.listdir(current_dir)
+    subdirs = [e for e in entries if isdir( join(current_dir,e) )]
+    files = ()
+
   matching_subdirs = match_entries(subdirs, pattern)
 
   if len(patterns) == 1 and rrdtool: #the last pattern may apply to RRD data sources
-    files = [e for e in entries if isfile( join(current_dir,e) )]
+    if not cached:
+      files = [e for e in entries if isfile( join(current_dir,e) )]
     rrd_files = match_entries(files, pattern + ".rrd")
 
     if rrd_files: #let's assume it does
@@ -206,11 +233,31 @@ def _find(current_dir, patterns):
         yield match
 
   else: #we've got the last pattern
-    files = [e for e in entries if isfile( join(current_dir,e) )]
+    if not cached:
+      files = [e for e in entries if isfile( join(current_dir,e) )]
     matching_files = match_entries(files, pattern + '.*')
 
     for basename in matching_subdirs + matching_files:
       yield join(current_dir, basename)
+
+  if local_cache != None:
+    if cached:
+      ts = timestamp
+    else:
+      ts = time.time()
+
+    try:
+      # put it at the front
+      del local_cache[current_dir]
+    except KeyError:
+      pass
+    local_cache[current_dir] = (subdirs, files, ts)
+    while len(local_cache) > LOCAL_CACHE_SIZE:
+      try:
+        local_cache.popitem(False) # pop least recently inserted
+      except KeyError:
+        # can occur due to a harmless TOCTOU race
+        pass
 
 
 def _deduplicate(entries):
