@@ -19,7 +19,7 @@ class IndexSearcher:
     self.last_mtime = 0
     self._tree = (None, {}) # (data, children)
     log.info("[IndexSearcher] performing initial index load")
-    self.reload()
+    #self.reload()
 
   @property
   def tree(self):
