@@ -19,8 +19,19 @@ try:
 except ImportError:
   import pickle
 
+if settings.USE_LOCAL_STORAGE_CACHE:
+  try:
+    import ordereddict
+    local_cache = ordereddict.OrderedDict()
+  except ImportError:
+    local_cache = None
+else:
+  local_cache = None
+
 
 DATASOURCE_DELIMETER = '::RRD_DATASOURCE::'
+LOCAL_CACHE_SIZE = 10000
+LOCAL_CACHE_EXPIRES = settings.REMOTE_FIND_CACHE_DURATION
 
 
 
@@ -182,14 +193,31 @@ def _find(current_dir, patterns):
   match the corresponding pattern in patterns"""
   pattern = patterns[0]
   patterns = patterns[1:]
-  entries = os.listdir(current_dir)
 
-  subdirs = [e for e in entries if isdir( join(current_dir,e) )]
-  matching_subdirs = match_entries(subdirs, pattern)
+  if local_cache != None:
+    key = (current_dir, pattern)
+    try:
+      matching_subdirs, matching_files, rrd_files, timestamp = local_cache.pop(key)
+      if time.time() - timestamp > LOCAL_CACHE_EXPIRES:
+        cached = False
+      else:
+        cached = True
+    except KeyError:
+      cached = False
+  else:
+    cached = False
+
+  if not cached:
+    entries = os.listdir(current_dir)
+    subdirs = [e for e in entries if isdir( join(current_dir,e) )]
+    matching_subdirs = match_entries(subdirs, pattern)
+    rrd_files = ()
+    matching_files = ()
 
   if len(patterns) == 1 and rrdtool: #the last pattern may apply to RRD data sources
-    files = [e for e in entries if isfile( join(current_dir,e) )]
-    rrd_files = match_entries(files, pattern + ".rrd")
+    if not cached:
+      files = [e for e in entries if isfile( join(current_dir,e) )]
+      rrd_files = match_entries(files, pattern + ".rrd")
 
     if rrd_files: #let's assume it does
       datasource_pattern = patterns[0]
@@ -206,11 +234,17 @@ def _find(current_dir, patterns):
         yield match
 
   else: #we've got the last pattern
-    files = [e for e in entries if isfile( join(current_dir,e) )]
-    matching_files = match_entries(files, pattern + '.*')
+    if not cached:
+      files = [e for e in entries if isfile( join(current_dir,e) )]
+      matching_files = match_entries(files, pattern + '.*')
 
     for basename in matching_subdirs + matching_files:
       yield join(current_dir, basename)
+
+  if local_cache != None:
+    local_cache[key] = (matching_subdirs, matching_files, rrd_files, time.time())
+    if len(local_cache) > LOCAL_CACHE_SIZE:
+      local_cache.popitem(False) # pop least recently inserted
 
 
 def _deduplicate(entries):

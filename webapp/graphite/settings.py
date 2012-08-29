@@ -78,6 +78,7 @@ DOCUMENTATION_URL = "http://graphite.readthedocs.org/"
 ALLOW_ANONYMOUS_CLI = True
 LOG_METRIC_ACCESS = False
 LEGEND_MAX_ITEMS = 10
+USE_LOCAL_STORAGE_CACHE = False
 
 #Authentication settings
 USE_LDAP_AUTH = False
