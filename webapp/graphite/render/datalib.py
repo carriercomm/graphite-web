@@ -215,6 +215,10 @@ CarbonLink = CarbonLinkPool(hosts, settings.CARBONLINK_TIMEOUT)
 
 # Data retrieval API
 def fetchData(requestContext, pathExpr):
+  if not 'cachedValues' in requestContext:
+    requestContext['cachedValues'] = {}
+  cachedValues = requestContext['cachedValues']
+
   seriesList = []
   startTime = requestContext['startTime']
   endTime = requestContext['endTime']
@@ -223,10 +227,15 @@ def fetchData(requestContext, pathExpr):
     store = LOCAL_STORE
   else:
     store = STORE
-
-  for dbFile in store.find(pathExpr):
-    log.metric_access(dbFile.metric_path)
-    dbResults = dbFile.fetch( timestamp(startTime), timestamp(endTime) )
+  dbFiles = store.find(pathExpr)
+  dbResultList = []
+  for dbFile in dbFiles:
+    try:
+      dbResultList.append((dbFile, cachedValues[dbFile.metric_path]))
+      dbFile.is_remote = True
+    except KeyError:
+      dbResultList.append((dbFile, dbFile.fetch(timestamp(startTime), timestamp(endTime))))
+  for dbFile, dbResults in dbResultList:
     if not dbFile.is_remote:
       try:
         cachedResults = CarbonLink.query(dbFile.real_metric)
@@ -236,6 +245,8 @@ def fetchData(requestContext, pathExpr):
         results = dbResults
     else:
       results = dbResults
+
+    cachedValues[dbFile.metric_path] = dbResults
 
     if not results:
       continue
