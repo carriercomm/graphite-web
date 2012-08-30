@@ -88,32 +88,21 @@ class FindRequest:
       else:
         results = []
 
-    resultNodes = [ RemoteNode(self.store, node['metric_path'], node['isLeaf']) for node in results ]
+    fetcher = RemoteFetch(self.store, self.query)
+    resultNodes = [ RemoteNode(self.store, fetcher, node['metric_path'], node['isLeaf']) for node in results ]
     cache.set(self.cacheKey, resultNodes, settings.REMOTE_FIND_CACHE_DURATION)
     self.cachedResults = resultNodes
     return resultNodes
 
-
-
-class RemoteNode:
-  context = {}
-
-  def __init__(self, store, metric_path, isLeaf):
+class RemoteFetch:
+  def __init__(self, store, query):
     self.store = store
-    self.fs_path = None
-    self.metric_path = metric_path
-    self.real_metric = metric_path
-    self.name = metric_path.split('.')[-1]
-    self.__isLeaf = isLeaf
-    self.is_remote = True
-
+    self.query = query
+    self.data = {}
 
   def fetch(self, startTime, endTime):
-    if not self.__isLeaf:
-      return []
-
     query_params = [
-      ('target', self.metric_path),
+      ('target', self.query),
       ('format', 'pickle'),
       ('local', '1'),
       ('from', str( int(startTime) )),
@@ -129,11 +118,33 @@ class RemoteNode:
     rawData = response.read()
 
     seriesList = pickle.loads(rawData)
-    assert len(seriesList) == 1, "Invalid result: seriesList=%s" % str(seriesList)
-    series = seriesList[0]
+    for series in seriesList:
 
-    timeInfo = (series['start'], series['end'], series['step'])
-    return (timeInfo, series['values'])
+      timeInfo = (series['start'], series['end'], series['step'])
+      self.data[series['name']] = (timeInfo, series['values'])
+
+
+class RemoteNode:
+  context = {}
+
+  def __init__(self, store, fetcher, metric_path, isLeaf):
+    self.store = store
+    self.fs_path = None
+    self.metric_path = metric_path
+    self.real_metric = metric_path
+    self.name = metric_path.split('.')[-1]
+    self.__isLeaf = isLeaf
+    self.is_remote = True
+    self.fetcher = fetcher
+
+
+  def fetch(self, startTime, endTime):
+    if not self.__isLeaf:
+      return []
+
+    if not self.fetcher.data:
+      self.fetcher.fetch(startTime, endTime)
+    return self.fetcher.data[self.metric_path]
 
 
   def isLeaf(self):
