@@ -5,12 +5,101 @@ from urllib import urlencode
 from django.core.cache import cache
 from django.conf import settings
 from graphite.render.hashing import compactHash
+import pycurl
+
+from graphite.logger import log
 
 try:
   import cPickle as pickle
 except ImportError:
   import pickle
 
+
+class RemoteOperation:
+  def __init__(self):
+    self.buf = None
+    self.curl_handle = None
+
+  def _set_store(self, store):
+    self.store = store
+
+  def _write(self, buf):
+    self.buf += buf
+
+  def _build_url(self):
+    pass
+
+  def get_handle(self):
+    return self.curl_handle
+
+  def start(self):
+    self.curl_handle = pycurl.Curl()
+    url = self._build_url()
+    log.info("curl is fetching %s" % url)
+    self.buf = ''
+    self.curl_handle.setopt(self.curl_handle.URL, url)
+    self.curl_handle.setopt(self.curl_handle.WRITEFUNCTION, self._write)
+
+  def finish(self):
+    if self.buf != '':
+      try:
+        self.load_data(pickle.loads(self.buf))
+      except pickle.UnpicklingError:
+        log.exception('error: %s returned unpicklable: %s' % (self._build_url(), self.buf))
+        raise
+    else:
+      self.store.fail()
+      if not self.suppressErrors:
+        raise
+      else:
+        self.load_data([])
+
+  def load_data(self, data):
+    pass
+
+class RemoteCoordinator:
+  def __init__(self, operations=None):
+    self.operations = operations or []
+    self.multi = None
+
+  def add_operation(self, operation):
+    self.operations.append(operation)
+
+  def start(self):
+    self.multi = pycurl.CurlMulti()
+    for o in self.operations:
+      o.start()
+      self.multi.add_handle(o.get_handle())
+
+    while 1:
+      ret, num_handles = self.multi.perform()
+      if ret != pycurl.E_CALL_MULTI_PERFORM:
+        break
+
+  def finish(self, timeout=settings.REMOTE_STORE_FIND_TIMEOUT):
+    num_handles = len(self.operations)
+
+    SELECT_TIMEOUT = 1.0
+    # Stir the state machine into action
+
+    t = time.time()
+    # Keep going until all the connections have terminated
+    while num_handles != 0:
+      if time.time() - t > timeout:
+        break
+      # The select method uses fdset internally to determine which file descriptors
+      # to check.
+      self.multi.select(SELECT_TIMEOUT)
+      while 1:
+        ret, num_handles = self.multi.perform()
+        if ret != pycurl.E_CALL_MULTI_PERFORM:
+          break
+    for o in self.operations:
+      self.multi.remove_handle(o.get_handle())
+      o.finish()
+      o.get_handle().close()
+
+    self.multi.close()
 
 
 class RemoteStore(object):
@@ -23,17 +112,13 @@ class RemoteStore(object):
 
 
   def find(self, query):
-    request = FindRequest(self, query)
-    request.send()
-    return request
-
+    return FindRequest(self, query)
 
   def fail(self):
     self.lastFailure = time.time()
 
 
-
-class FindRequest:
+class FindRequest(RemoteOperation):
   suppressErrors = True
 
   def __init__(self, store, query):
@@ -42,84 +127,57 @@ class FindRequest:
     self.connection = None
     self.cacheKey = compactHash('find:%s:%s' % (self.store.host, query))
     self.cachedResults = None
+    RemoteOperation.__init__(self)
 
-
-  def send(self):
-    self.cachedResults = cache.get(self.cacheKey)
-
-    if self.cachedResults:
-      return
-
-    self.connection = HTTPConnectionWithTimeout(self.store.host)
-    self.connection.timeout = settings.REMOTE_STORE_FIND_TIMEOUT
-
+  def _build_url(self):
     query_params = [
       ('local', '1'),
       ('format', 'pickle'),
       ('query', self.query),
     ]
     query_string = urlencode(query_params)
+    return  'http://%s/metrics/find/?%s' % (self.store.host, query_string)
 
-    try:
-      self.connection.request('GET', '/metrics/find/?' + query_string)
-    except:
-      self.store.fail()
-      if not self.suppressErrors:
-        raise
-
-
-  def get_results(self):
-    if self.cachedResults:
-      return self.cachedResults
-
-    if not self.connection:
-      self.send()
-
-    try:
-      response = self.connection.getresponse()
-      assert response.status == 200, "received error response %s - %s" % (response.status, response.reason)
-      result_data = response.read()
-      results = pickle.loads(result_data)
-
-    except:
-      self.store.fail()
-      if not self.suppressErrors:
-        raise
-      else:
-        results = []
-
+  def load_data(self, results):
     fetcher = RemoteFetch(self.store, self.query)
     resultNodes = [ RemoteNode(self.store, fetcher, node['metric_path'], node['isLeaf']) for node in results ]
     cache.set(self.cacheKey, resultNodes, settings.REMOTE_FIND_CACHE_DURATION)
     self.cachedResults = resultNodes
-    return resultNodes
 
-class RemoteFetch:
+  def get_results(self):
+    return self.cachedResults
+
+
+class RemoteFetch(RemoteOperation):
+  suppressErrors = True
   def __init__(self, store, query):
     self.store = store
     self.query = query
     self.data = {}
+    self.string_io = None
+    self.curl_handle = None
+    RemoteOperation.__init__(self)
 
-  def fetch(self, startTime, endTime):
+  def _build_url(self):
     query_params = [
       ('target', self.query),
       ('format', 'pickle'),
       ('local', '1'),
-      ('from', str( int(startTime) )),
-      ('until', str( int(endTime) ))
+      ('from', str( int(self.startTime) )),
+      ('until', str( int(self.endTime) ))
     ]
     query_string = urlencode(query_params)
+    return  'http://%s/render/?%s' % (self.store.host, query_string)
 
-    connection = HTTPConnectionWithTimeout(self.store.host)
-    connection.timeout = settings.REMOTE_STORE_FETCH_TIMEOUT
-    connection.request('GET', '/render/?' + query_string)
-    response = connection.getresponse()
-    assert response.status == 200, "Failed to retrieve remote data: %d %s" % (response.status, response.reason)
-    rawData = response.read()
+  def write(self, buf):
+    self.string_io += buf
 
-    seriesList = pickle.loads(rawData)
+  def fetch(self, startTime, endTime):
+    self.startTime = startTime
+    self.endTime = endTime
+
+  def load_data(self, seriesList):
     for series in seriesList:
-
       timeInfo = (series['start'], series['end'], series['step'])
       self.data[series['name']] = (timeInfo, series['values'])
 
@@ -142,9 +200,11 @@ class RemoteNode:
     if not self.__isLeaf:
       return []
 
-    if not self.fetcher.data:
-      self.fetcher.fetch(startTime, endTime)
-    return self.fetcher.data[self.metric_path]
+    try:
+      return self.fetcher.data[self.metric_path]
+    except KeyError:
+      log.info('%s not in %s' % (self.metric_path, repr(self.fetcher.data)))
+      raise
 
 
   def isLeaf(self):

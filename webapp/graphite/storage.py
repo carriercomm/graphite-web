@@ -1,8 +1,9 @@
 import os, time, fnmatch, socket, errno
 from os.path import isdir, isfile, join, exists, splitext, basename, realpath
 import whisper
-from graphite.remote_storage import RemoteStore
+from graphite.remote_storage import RemoteStore, RemoteCoordinator
 from django.conf import settings
+from graphite.logger import log
 
 try:
   import rrdtool
@@ -75,6 +76,9 @@ class Store:
 
     # If nothing found earch remotely
     remote_requests = [ r.find(query) for r in self.remote_stores if r.available ]
+    remotes = RemoteCoordinator(remote_requests)
+    remotes.start()
+    remotes.finish()
 
     for request in remote_requests:
       for match in request.get_results():
@@ -85,6 +89,8 @@ class Store:
     # Start remote searches
     found = set()
     remote_requests = [ r.find(query) for r in self.remote_stores if r.available ]
+    remotes = RemoteCoordinator(remote_requests)
+    remotes.start()
 
     # Search locally
     for directory in self.directories:
@@ -94,6 +100,7 @@ class Store:
           found.add(match.metric_path)
 
     # Gather remote search results
+    remotes.finish()
     for request in remote_requests:
       for match in request.get_results():
 
