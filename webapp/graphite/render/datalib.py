@@ -17,6 +17,7 @@ import struct
 import time
 from django.conf import settings
 from graphite.logger import log
+from graphite.remote_storage import RemoteCoordinator
 from graphite.storage import STORE, LOCAL_STORE
 from graphite.render.hashing import ConsistentHashRing
 
@@ -223,14 +224,31 @@ def fetchData(requestContext, pathExpr):
     store = LOCAL_STORE
   else:
     store = STORE
+
   dbFiles = store.find(pathExpr)
+  remotes = RemoteCoordinator()
   dbResultList = []
+  deferredFetch = []
+
   for dbFile in dbFiles:
     try:
       dbResultList.append((dbFile, cachedValues[dbFile.metric_path]))
       dbFile.is_remote = True
     except KeyError:
-      dbResultList.append((dbFile, dbFile.fetch(timestamp(startTime), timestamp(endTime))))
+      if dbFile.is_remote:
+        deferredFetch.append(dbFile)
+        if not dbFile.fetcher in remotes.operations:
+          dbFile.fetcher.fetch(timestamp(startTime), timestamp(endTime))
+          remotes.add_operation(dbFile.fetcher)
+      else:
+        dbResultList.append((dbFile, dbFile.fetch(timestamp(startTime), timestamp(endTime))))
+
+  remotes.start()
+  remotes.finish(timeout=settings.REMOTE_STORE_FETCH_TIMEOUT)
+
+  for dbFile in deferredFetch:
+    dbResultList.append((dbFile, dbFile.fetch(timestamp(startTime), timestamp(endTime))))
+
   for dbFile, dbResults in dbResultList:
     if not dbFile.is_remote:
       try:
