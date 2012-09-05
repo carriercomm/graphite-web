@@ -39,6 +39,7 @@ class TimeSeries(list):
     self.options = {}
     self.aggregationMethod = 'average'
     self.finestStep = step
+    self.info = {}
 
   def __iter__(self):
     if self.valuesPerPoint > 1:
@@ -90,6 +91,7 @@ class TimeSeries(list):
       'end' : self.end,
       'step' : self.step,
       'values' : list(self),
+      'info': self.info
     }
 
 
@@ -270,6 +272,7 @@ def fetchData(requestContext, pathExpr):
     series = TimeSeries(dbFile.metric_path, start, end, step, values)
     try:
       info = dbFile.getInfo()
+      series.info = info
       series.aggregationMethod = info['aggregationMethod']
       series.finestStep = info['archives'][0]['secondsPerPoint']
     except AttributeError:

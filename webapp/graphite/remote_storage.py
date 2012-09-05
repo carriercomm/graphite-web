@@ -154,6 +154,7 @@ class RemoteFetch(RemoteOperation):
     self.store = store
     self.query = query
     self.data = {}
+    self.info = {}
     self.string_io = None
     self.curl_handle = None
     RemoteOperation.__init__(self)
@@ -180,6 +181,7 @@ class RemoteFetch(RemoteOperation):
     for series in seriesList:
       timeInfo = (series['start'], series['end'], series['step'])
       self.data[series['name']] = (timeInfo, series['values'])
+      self.info[series['name']] = series['info']
 
 
 class RemoteNode:
@@ -210,6 +212,8 @@ class RemoteNode:
   def isLeaf(self):
     return self.__isLeaf
 
+  def getInfo(self):
+    return self.fetcher.info[self.metric_path]
 
 
 # This is a hack to put a timeout in the connect() of an HTTP request.
