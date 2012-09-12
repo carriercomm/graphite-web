@@ -217,6 +217,9 @@ def fetchData(requestContext, pathExpr):
   if not 'cachedValues' in requestContext:
     requestContext['cachedValues'] = {}
   cachedValues = requestContext['cachedValues']
+  if not 'cachedInfo' in requestContext:
+    requestContext['cachedInfo'] = {}
+  cachedInfo = requestContext['cachedInfo']
 
   seriesList = []
   startTime = requestContext['startTime']
@@ -271,7 +274,12 @@ def fetchData(requestContext, pathExpr):
     (start,end,step) = timeInfo
     series = TimeSeries(dbFile.metric_path, start, end, step, values)
     try:
-      info = dbFile.getInfo()
+      try:
+        info = cachedInfo[dbFile.metric_path]
+      except KeyError:
+        info = dbFile.getInfo()
+        cachedInfo[dbFile.metric_path] = info
+
       series.info = info
       series.aggregationMethod = info['aggregationMethod']
       series.finestStep = info['archives'][0]['secondsPerPoint']
