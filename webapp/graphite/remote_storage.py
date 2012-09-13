@@ -26,6 +26,11 @@ class RemoteOperation:
   def _write(self, buf):
     self.buf += buf
 
+  def timeout(self):
+    self.buf = ''
+    url = self._build_url()
+    log.info('curl timed out fetching %s' % url)
+
   def _build_url(self):
     pass
 
@@ -35,7 +40,7 @@ class RemoteOperation:
   def start(self):
     self.curl_handle = pycurl.Curl()
     url = self._build_url()
-    log.info("curl is fetching %s" % url)
+    log.info('curl is fetching %s' % url)
     self.buf = ''
     self.curl_handle.setopt(self.curl_handle.URL, url)
     self.curl_handle.setopt(self.curl_handle.WRITEFUNCTION, self._write)
@@ -81,15 +86,19 @@ class RemoteCoordinator:
 
     SELECT_TIMEOUT = 1.0
     # Stir the state machine into action
+    timeout_count = 0
 
-    t = time.time()
     # Keep going until all the connections have terminated
     while num_handles != 0:
-      if time.time() - t > timeout:
+      if timeout_count > timeout:
+        for o in self.operations:
+          o.timeout()
         break
       # The select method uses fdset internally to determine which file descriptors
       # to check.
-      self.multi.select(SELECT_TIMEOUT)
+      if self.multi.select(SELECT_TIMEOUT) == -1:
+        timeout_count += 1
+
       while 1:
         ret, num_handles = self.multi.perform()
         if ret != pycurl.E_CALL_MULTI_PERFORM:
