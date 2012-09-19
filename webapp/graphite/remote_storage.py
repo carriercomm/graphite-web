@@ -14,6 +14,11 @@ try:
 except ImportError:
   import pickle
 
+try:
+  import cStringIO as StringIO
+except ImportError:
+  import StringIO
+
 
 class RemoteOperation:
   def __init__(self):
@@ -24,10 +29,10 @@ class RemoteOperation:
     self.store = store
 
   def _write(self, buf):
-    self.buf += buf
+    self.buf.write(buf)
 
   def timeout(self):
-    self.buf = ''
+    self.buf = StringIO.StringIO()
     url = self._build_url()
     log.info('curl timed out fetching %s' % url)
 
@@ -41,16 +46,19 @@ class RemoteOperation:
     self.curl_handle = pycurl.Curl()
     url = self._build_url()
     log.info('curl is fetching %s' % url)
-    self.buf = ''
+    self.buf = StringIO.StringIO()
     self.curl_handle.setopt(self.curl_handle.URL, url)
     self.curl_handle.setopt(self.curl_handle.WRITEFUNCTION, self._write)
 
   def finish(self):
-    if self.buf != '':
+    bufstring = ''
+    if self.buf:
+      bufstring = self.buf.getvalue()
+    if bufstring != '':
       try:
-        self.load_data(pickle.loads(self.buf))
+        self.load_data(pickle.loads(bufstring))
       except pickle.UnpicklingError:
-        log.exception('error: %s returned unpicklable: %s' % (self._build_url(), self.buf))
+        log.exception('error: %s returned unpicklable: %s' % (self._build_url(), bufstring))
         raise
     else:
       self.store.fail()
@@ -71,6 +79,9 @@ class RemoteCoordinator:
     self.operations.append(operation)
 
   def start(self):
+    if not self.operations:
+      return
+
     self.multi = pycurl.CurlMulti()
     for o in self.operations:
       o.start()
@@ -82,6 +93,8 @@ class RemoteCoordinator:
         break
 
   def finish(self, timeout=settings.REMOTE_STORE_FIND_TIMEOUT):
+    if not self.multi:
+      return
     num_handles = len(self.operations)
 
     SELECT_TIMEOUT = 1.0
@@ -109,6 +122,7 @@ class RemoteCoordinator:
       o.get_handle().close()
 
     self.multi.close()
+    self.multi = None
 
 
 class RemoteStore(object):
@@ -164,7 +178,6 @@ class RemoteFetch(RemoteOperation):
     self.query = query
     self.data = {}
     self.info = {}
-    self.string_io = None
     self.curl_handle = None
     RemoteOperation.__init__(self)
 
@@ -178,9 +191,6 @@ class RemoteFetch(RemoteOperation):
     ]
     query_string = urlencode(query_params)
     return  'http://%s/render/?%s' % (self.store.host, query_string)
-
-  def write(self, buf):
-    self.string_io += buf
 
   def fetch(self, startTime, endTime):
     self.startTime = startTime
