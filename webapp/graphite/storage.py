@@ -189,12 +189,21 @@ def _find(current_dir, patterns):
   match the corresponding pattern in patterns"""
   pattern = patterns[0]
   patterns = patterns[1:]
-  entries = os.listdir(current_dir)
+  entries = None
 
-  subdirs = [e for e in entries if isdir( join(current_dir,e) )]
-  matching_subdirs = match_entries(subdirs, pattern)
+  if is_pattern(pattern):
+    entries = os.listdir(current_dir)
+    subdirs = [e for e in entries if isdir( join(current_dir,e) )]
+    matching_subdirs = match_entries(subdirs, pattern)
+  else:
+    if isdir(join(current_dir, pattern)):
+      matching_subdirs = [pattern]
+    else:
+      matching_subdirs = []
 
   if len(patterns) == 1 and rrdtool: #the last pattern may apply to RRD data sources
+    if entries == None:
+      entries = os.listdir(current_dir)
     files = [e for e in entries if isfile( join(current_dir,e) )]
     rrd_files = match_entries(files, pattern + ".rrd")
 
@@ -213,6 +222,9 @@ def _find(current_dir, patterns):
         yield match
 
   else: #we've got the last pattern
+    if entries == None:
+      entries = os.listdir(current_dir)
+
     files = [e for e in entries if isfile( join(current_dir,e) )]
     matching_files = match_entries(files, pattern + '.*')
 
