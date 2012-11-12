@@ -241,7 +241,7 @@ def fetchData(requestContext, pathExpr):
 
   for dbFile in dbFiles:
     try:
-      dbResultList.append((dbFile, cachedValues[dbFile.metric_path]))
+      dbResultList.append((dbFile, cachedValues[(dbFile.metric_path, startTime, endTime)]))
       dbFile.is_remote = True
     except KeyError:
       if dbFile.is_remote:
@@ -269,7 +269,7 @@ def fetchData(requestContext, pathExpr):
     else:
       results = dbResults
 
-    cachedValues[dbFile.metric_path] = dbResults
+    cachedValues[(dbFile.metric_path, startTime, endTime)] = dbResults
 
     if not results:
       continue
@@ -279,10 +279,10 @@ def fetchData(requestContext, pathExpr):
     series = TimeSeries(dbFile.metric_path, start, end, step, values)
     try:
       try:
-        info = cachedInfo[dbFile.metric_path]
+        info = cachedInfo[(dbFile.metric_path, startTime, endTime)]
       except KeyError:
         info = dbFile.getInfo()
-        cachedInfo[dbFile.metric_path] = info
+        cachedInfo[(dbFile.metric_path, startTime, endTime)] = info
 
       series.info = info
       series.aggregationMethod = info['aggregationMethod']
