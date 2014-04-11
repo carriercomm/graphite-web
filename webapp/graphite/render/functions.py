@@ -488,9 +488,10 @@ def weightedAverage(requestContext, seriesListAvg, seriesListWeight, *nodes):
     key = ".".join([seriesAvgNodes[n] for n in nodes])
     if key not in sortedSeries:
       sortedSeries[key] = {}
-
     sortedSeries[key]['avg'] = seriesAvg
-    key = seriesWeight.name.split(".")[node]
+
+    seriesWeightNodes = seriesWeight.name.split(".")
+    key = ".".join([seriesWeightNodes[n] for n in nodes])
     if key not in sortedSeries:
       sortedSeries[key] = {}
     sortedSeries[key]['weight'] = seriesWeight
