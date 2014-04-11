@@ -464,26 +464,30 @@ def multiplySeries(requestContext, *seriesLists):
   resultSeries.pathExpression = name
   return [ resultSeries ]
 
-def weightedAverage(requestContext, seriesListAvg, seriesListWeight, node):
+def weightedAverage(requestContext, seriesListAvg, seriesListWeight, *nodes):
   """
   Takes a series of average values and a series of weights and
   produces a weighted average for all values.
 
-  The corresponding values should share a node as defined
-  by the node parameter, 0-indexed.
+  The corresponding values should share one or more nodes as defined
+  by the *nodes parameter, 0-indexed.
 
   Example:
 
   .. code-block:: none
 
-    &target=weightedAverage(*.transactions.mean,*.transactions.count,0)
+    &target=weightedAverage(*.foo.*.baz.zoo.mean,*.foo.*.baz.count,0,2)
 
   """
+
+  if type(nodes) is int:
+    nodes = [nodes]
 
   sortedSeries = {}
 
   for seriesAvg, seriesWeight in izip(seriesListAvg, seriesListWeight):
-    key = seriesAvg.name.split(".")[node]
+    seriesAvgNodes = seriesAvg.name.split(".")
+    key = ".".join([seriesAvgNodes[n] for n in nodes])
     if key not in sortedSeries:
       sortedSeries[key] = {}
 
