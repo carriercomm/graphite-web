@@ -42,5 +42,30 @@ def evaluateTokens(requestContext, tokens):
     return tokens.boolean[0] == 'true'
 
 
+def extractPathsFromTarget(target):
+  tokens = grammar.parseString(target)
+  return evaluateTokensForPaths(tokens)
+
+
+def evaluateTokensForPaths(tokens):
+  if tokens.expression:
+    return evaluateTokensForPaths(tokens.expression)
+  elif tokens.pathExpression:
+    return [tokens.pathExpression]
+  elif tokens.call:
+    args = []
+    for arg in tokens.call.args:
+      argTokens = evaluateTokensForPaths(arg)
+      if not argTokens:
+        continue
+      elif isinstance(argTokens, list):
+        args += argTokens
+      else:
+        args.append(argTokens)
+    return args
+  else:
+    return None
+
+
 #Avoid import circularities
 from graphite.render.functions import SeriesFunctions
