@@ -256,6 +256,70 @@ def averageSeries(requestContext, *seriesLists):
   series.pathExpression = name
   return [series]
 
+def averageWeightedSeriesWithWildcards(requestContext, avgPathStr, avgPathSub, weightPathReplace, *wildcards):
+  """
+  Takes a string representing the average series path expression, a regex
+  to substitute against that path expression string such that the resulting
+  path expression represents the location of the corresponding weight series.
+  Also takes an optional array of wildcard integers, as in the function
+  ``averageSeriesWithWildcards``.
+
+  Produces a weighted average for all groups according to the wildcard locations
+  or simply a single weighted average if no wildcards are supplied.
+
+  The corresponding values should share all nodes that are not specified in
+  the wildcard array, 0-indexed.
+
+  Example:
+
+  .. code-block:: none
+
+    &target=averageWeightedSeriesWithWildcards("*.foo.*.baz.zoo.mean","zoo.mean","count",0)
+
+  This will generate one weighted average series plot per unique node that
+  expands in the 2-index position.
+
+  """
+  avgPathNodes = avgPathStr.split('.')
+  weightPathStr = re.sub(avgPathSub, weightPathReplace, avgPathStr)
+  avgSeriesList = evaluateTarget(requestContext, avgPathStr)
+  weightSeriesList = evaluateTarget(requestContext, weightPathStr)
+  wildcardSeries = {}
+  companionWildcardMap = {}
+
+  for avgSeries in avgSeriesList:
+    companionPath = re.sub(avgPathSub, weightPathReplace, avgSeries.name)
+    avgSeriesNodes = avgSeries.name.split('.')
+    wildcardKeyNodes = []
+    for i in range(len(avgSeriesNodes)):
+      if i in wildcards:
+        continue
+      wildcardKeyNodes.append(avgSeriesNodes[i])
+    wildcardKey = '.'.join(wildcardKeyNodes)
+    companionWildcardMap[companionPath] = wildcardKey
+    if wildcardKey not in wildcardSeries:
+      wildcardSeries[wildcardKey] = {companionPath: {'avg': avgSeries}}
+      continue
+    if companionPath in wildcardSeries[wildcardKey]:
+      continue
+    wildcardSeries[wildcardKey][companionPath] = {'avg': avgSeries}
+
+  for weightSeries in weightSeriesList:
+    if weightSeries.name not in companionWildcardMap:
+      continue
+    wildcardKey = companionWildcardMap[weightSeries.name]
+    if wildcardKey not in wildcardSeries or weightSeries.name not in wildcardSeries[wildcardKey]:
+      continue
+    wildcardSeries[wildcardKey][weightSeries.name]['weight'] = weightSeries
+
+  res = []
+  for wildcardKey, groupedSeries in wildcardSeries.items():
+    weightedAvgSeries = weightedAverageReducer(requestContext, groupedSeries)
+    weightedAvgSeries.name = wildcardKey
+    res.append(weightedAvgSeries)
+
+  return res
+
 def minSeries(requestContext, *seriesLists):
   """
   Takes one metric or a wildcard seriesList.
@@ -483,31 +547,38 @@ def weightedAverage(requestContext, seriesListAvg, seriesListWeight, *nodes):
   if type(nodes) is int:
     nodes = [nodes]
 
-  sortedSeries = {}
+  groupedSeries = {}
 
   for seriesAvg, seriesWeight in izip(seriesListAvg, seriesListWeight):
     seriesAvgNodes = seriesAvg.name.split(".")
     key = ".".join([seriesAvgNodes[n] for n in nodes])
-    if key not in sortedSeries:
-      sortedSeries[key] = {}
-    sortedSeries[key]['avg'] = seriesAvg
+    if key not in groupedSeries:
+      groupedSeries[key] = {}
+    groupedSeries[key]['avg'] = seriesAvg
 
     seriesWeightNodes = seriesWeight.name.split(".")
     key = ".".join([seriesWeightNodes[n] for n in nodes])
-    if key not in sortedSeries:
-      sortedSeries[key] = {}
-    sortedSeries[key]['weight'] = seriesWeight
+    if key not in groupedSeries:
+      groupedSeries[key] = {}
+    groupedSeries[key]['weight'] = seriesWeight
 
+  return weightedAverageReducer(requestContext, groupedSeries)
+
+def weightedAverageReducer(requestContext, groupedSeries):
   productList = []
+  seriesListWeight = []
+  seriesListAvg = []
 
-  for key in sortedSeries.keys():
-    if 'weight' not in sortedSeries[key]:
+  for seriesGroup in groupedSeries.values():
+    if 'weight' not in seriesGroup:
       continue
-    if 'avg' not in sortedSeries[key]:
+    if 'avg' not in seriesGroup:
       continue
 
-    seriesWeight = sortedSeries[key]['weight']
-    seriesAvg = sortedSeries[key]['avg']
+    seriesWeight = seriesGroup['weight']
+    seriesAvg = seriesGroup['avg']
+    seriesListWeight.append(seriesWeight)
+    seriesListAvg.append(seriesAvg)
 
     productValues = [safeMul(val1, val2) for val1, val2 in izip(seriesAvg, seriesWeight)]
     name = 'product(%s, %s)' % (seriesWeight.name, seriesAvg.name)
@@ -2536,6 +2607,7 @@ SeriesFunctions = {
   'avg' : averageSeries,
   'sumSeriesWithWildcards': sumSeriesWithWildcards,
   'averageSeriesWithWildcards': averageSeriesWithWildcards,
+  'averageWeightedSeriesWithWildcards': averageWeightedSeriesWithWildcards,
   'minSeries' : minSeries,
   'maxSeries' : maxSeries,
   'rangeOfSeries': rangeOfSeries,
