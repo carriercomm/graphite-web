@@ -256,11 +256,11 @@ def averageSeries(requestContext, *seriesLists):
   series.pathExpression = name
   return [series]
 
-def averageWeightedSeriesWithWildcards(requestContext, avgPathStr, avgPathSub, weightPathReplace, *wildcards):
+def averageWeightedSeriesWithWildcards(requestContext, avgSeriesList, avgPathSub, weightPathReplace, *wildcards):
   """
-  Takes a string representing the average series path expression, a regex
-  to substitute against that path expression string such that the resulting
-  path expression represents the location of the corresponding weight series.
+  Takes a series of average values, a regular expression string for
+  substitution and a replacement string to use as the substitution
+  target to build a list of `companion' weight paths to evaluate/fetch.
   Also takes an optional array of wildcard integers, as in the function
   ``averageSeriesWithWildcards``.
 
@@ -274,19 +274,16 @@ def averageWeightedSeriesWithWildcards(requestContext, avgPathStr, avgPathSub, w
 
   .. code-block:: none
 
-    &target=averageWeightedSeriesWithWildcards("*.foo.*.baz.zoo.mean","zoo.mean","count",0)
+    &target=averageWeightedSeriesWithWildcards(*.foo.*.baz.zoo.mean,"zoo.mean","count",0)
 
   This will generate one weighted average series plot per unique node that
   expands in the 2-index position.
 
   """
-  avgPathNodes = avgPathStr.split('.')
-  weightPathStr = re.sub(avgPathSub, weightPathReplace, avgPathStr)
-  avgSeriesList = evaluateTarget(requestContext, avgPathStr)
-  weightSeriesList = evaluateTarget(requestContext, weightPathStr)
   wildcardSeries = {}
   companionWildcardMap = {}
 
+  # Create a map of avg -> weight -> wildcard.
   for avgSeries in avgSeriesList:
     companionPath = re.sub(avgPathSub, weightPathReplace, avgSeries.name)
     avgSeriesNodes = avgSeries.name.split('.')
@@ -296,25 +293,53 @@ def averageWeightedSeriesWithWildcards(requestContext, avgPathStr, avgPathSub, w
         continue
       wildcardKeyNodes.append(avgSeriesNodes[i])
     wildcardKey = '.'.join(wildcardKeyNodes)
-    companionWildcardMap[companionPath] = wildcardKey
+    if companionPath in companionWildcardMap:
+      companionWildcardMap[companionPath].add(wildcardKey)
+    else:
+      companionWildcardMap[companionPath] = set([wildcardKey])
     if wildcardKey not in wildcardSeries:
-      wildcardSeries[wildcardKey] = {companionPath: {'avg': avgSeries}}
-      continue
-    if companionPath in wildcardSeries[wildcardKey]:
-      continue
-    wildcardSeries[wildcardKey][companionPath] = {'avg': avgSeries}
+      wildcardSeries[wildcardKey] = {companionPath: {'avg': [avgSeries]}}
+    elif companionPath in wildcardSeries[wildcardKey]:
+      wildcardSeries[wildcardKey][companionPath]['avg'].append(avgSeries)
+    else:
+      wildcardSeries[wildcardKey][companionPath] = {'avg': [avgSeries]}
 
-  for weightSeries in weightSeriesList:
-    if weightSeries.name not in companionWildcardMap:
-      continue
-    wildcardKey = companionWildcardMap[weightSeries.name]
-    if wildcardKey not in wildcardSeries or weightSeries.name not in wildcardSeries[wildcardKey]:
-      continue
-    wildcardSeries[wildcardKey][weightSeries.name]['weight'] = weightSeries
+  # Reduce weightSeries path list to a compact pathExpression map
+  weightSeriesPathGroups = {}
+  for weightSeriesPath in companionWildcardMap:
+    pathComponents = weightSeriesPath.split('.')
+    pathLen = len(pathComponents)
+    if pathLen in weightSeriesPathGroups:
+      commonNodes = weightSeriesPathGroups[pathLen]
+    else:
+      commonNodes = {}
+    for i in range(len(pathComponents)):
+      if i in commonNodes:
+        commonNodes[i].add(pathComponents[i])
+      else:
+        commonNodes[i] = set([pathComponents[i]])
+    weightSeriesPathGroups[pathLen] = commonNodes
 
+  # Take the compacted pathExpression map and translate each group
+  # to a pathExpression string and evaluate/fetch it.
+  for weightSeriesPathGroup in weightSeriesPathGroups.values():
+    weightSeriesPathExpressionNodes = []
+    for nodes in weightSeriesPathGroup.values():
+      if len(nodes) > 1:
+        nodeStr = '{%s}' % ','.join(nodes)
+        weightSeriesPathExpressionNodes.append(nodeStr)
+      else:
+        weightSeriesPathExpressionNodes.append(nodes.pop())
+    weightSeriesPathExpression = '.'.join(weightSeriesPathExpressionNodes)
+    for w in evaluateTarget(requestContext, weightSeriesPathExpression):
+      if w.name in companionWildcardMap:
+        for wildcardKey in companionWildcardMap[w.name]:
+          wildcardSeries[wildcardKey][w.name]['weight'] = w
+
+  # Generate a weighted average series for each wildcard key.
   res = []
   for wildcardKey, groupedSeries in wildcardSeries.items():
-    weightedAvgSeries = weightedAverageReducer(requestContext, groupedSeries)
+    weightedAvgSeries = weightedAverageReducer(requestContext, groupedSeries.values())
     weightedAvgSeries.name = wildcardKey
     res.append(weightedAvgSeries)
 
@@ -554,7 +579,7 @@ def weightedAverage(requestContext, seriesListAvg, seriesListWeight, *nodes):
     key = ".".join([seriesAvgNodes[n] for n in nodes])
     if key not in groupedSeries:
       groupedSeries[key] = {}
-    groupedSeries[key]['avg'] = seriesAvg
+    groupedSeries[key]['avg'] = [seriesAvg]
 
     seriesWeightNodes = seriesWeight.name.split(".")
     key = ".".join([seriesWeightNodes[n] for n in nodes])
@@ -562,29 +587,25 @@ def weightedAverage(requestContext, seriesListAvg, seriesListWeight, *nodes):
       groupedSeries[key] = {}
     groupedSeries[key]['weight'] = seriesWeight
 
-  return weightedAverageReducer(requestContext, groupedSeries)
+  return weightedAverageReducer(requestContext, groupedSeries.values())
 
-def weightedAverageReducer(requestContext, groupedSeries):
+def weightedAverageReducer(requestContext, seriesGroups):
   productList = []
   seriesListWeight = []
   seriesListAvg = []
 
-  for seriesGroup in groupedSeries.values():
-    if 'weight' not in seriesGroup:
+  for seriesGroup in seriesGroups:
+    if 'weight' not in seriesGroup or 'avg' not in seriesGroup:
       continue
-    if 'avg' not in seriesGroup:
-      continue
-
     seriesWeight = seriesGroup['weight']
-    seriesAvg = seriesGroup['avg']
-    seriesListWeight.append(seriesWeight)
-    seriesListAvg.append(seriesAvg)
-
-    productValues = [safeMul(val1, val2) for val1, val2 in izip(seriesAvg, seriesWeight)]
-    name = 'product(%s, %s)' % (seriesWeight.name, seriesAvg.name)
-    productSeries = TimeSeries(name, seriesAvg.start, seriesAvg.end, seriesAvg.step, productValues)
-    productSeries.pathExpression = name
-    productList.append(productSeries)
+    for seriesAvg in seriesGroup['avg']:
+      seriesListWeight.append(seriesWeight)
+      seriesListAvg.append(seriesAvg)
+      productValues = [safeMul(val1, val2) for val1, val2 in izip(seriesAvg, seriesWeight)]
+      name = 'product(%s, %s)' % (seriesWeight.name, seriesAvg.name)
+      productSeries = TimeSeries(name, seriesAvg.start, seriesAvg.end, seriesAvg.step, productValues)
+      productSeries.pathExpression = name
+      productList.append(productSeries)
 
   sumProducts = sumSeries(requestContext, productList)[0]
   sumWeights = sumSeries(requestContext, seriesListWeight)[0]
