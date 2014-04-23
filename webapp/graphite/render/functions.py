@@ -278,8 +278,12 @@ def averageWeightedSeriesWithWildcards(requestContext, avgSeriesList, avgPathSub
 
   Where an average path that expands to "x.a.k.mean" maps to "x.a.k.count"
   and another average path that expands to "x.a.k.mean2" maps to "x.a.count"
-  This will generate one weighted average series plot per unique node that
-  expands from the averageSeriesList.
+
+  Given a list of avgSeries paths that each successfully map to an
+  existing weight path, this function will discard the 0-index node
+  (according to the arguments in this example) from each avgSeries path
+  creating a unique list of wildcard paths, each resulting in a separate
+  TimeSeries plot of their weightedAverage.
 
   """
   wildcardSeries = {}
