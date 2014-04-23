@@ -274,18 +274,32 @@ def averageWeightedSeriesWithWildcards(requestContext, avgSeriesList, avgPathSub
 
   .. code-block:: none
 
-    &target=averageWeightedSeriesWithWildcards(*.foo.*.baz.zoo.mean,"zoo.mean","count",0)
+    &target=averageWeightedSeriesWithWildcards(*.*.k.mean*,".(mean|k.mean2)$",".count",0)
 
+  Where an average path that expands to "x.a.k.mean" maps to "x.a.k.count"
+  and another average path that expands to "x.a.k.mean2" maps to "x.a.count"
   This will generate one weighted average series plot per unique node that
-  expands in the 2-index position.
+  expands from the averageSeriesList.
 
   """
   wildcardSeries = {}
   companionWildcardMap = {}
+  avgPathSubRe = re.compile(avgPathSub)
 
-  # Create a map of avg -> weight -> wildcard.
+  # Create a map of avg -> weight <-> wildcard key. The above example
+  # would create a mapping like:
+  # { 'x.a.count': set(['a.count', 'b.count']),
+  #   'x.b.count': set(['a.count', 'b.count']),
+  #   'y.a.count': set(['a.count', 'b.count']),
+  #   'y.b.count': set(['a.count', 'b.count']),
+  #   'x.a.k.count': set(['a.k.count', 'b.k.count']),
+  #   'x.b.k.count': set(['a.k.count', 'b.k.count']),
+  #   'y.a.k.count': set(['a.k.count', 'b.k.count']),
+  #   'y.b.k.count': set(['a.k.count', 'b.k.count']) }
   for avgSeries in avgSeriesList:
-    companionPath = re.sub(avgPathSub, weightPathReplace, avgSeries.name)
+    companionPath = avgPathSubRe.sub(weightPathReplace, avgSeries.name)
+    if companionPath == avgSeries.name:
+      continue
     avgSeriesNodes = avgSeries.name.split('.')
     wildcardKeyNodes = []
     for i in range(len(avgSeriesNodes)):
@@ -304,7 +318,12 @@ def averageWeightedSeriesWithWildcards(requestContext, avgSeriesList, avgPathSub
     else:
       wildcardSeries[wildcardKey][companionPath] = {'avg': [avgSeries]}
 
-  # Reduce weightSeries path list to a compact pathExpression map
+  # Reduce weightSeries path list to a compact pathExpression map.
+  # weightSeriesPathGroups keeps a mapping of common path node lengths
+  # to compacted path node maps, eg, for the above example we would
+  # generate the following map:
+  # { 3: {0: set(['x', 'y']), 1: set(['a', 'b']), 2: set(['count'])},
+  #   4: {0: set(['x', 'y']), 1: set(['a', 'b']), 2: set(['k']), 3: set(['count'])} }
   weightSeriesPathGroups = {}
   for weightSeriesPath in companionWildcardMap:
     pathComponents = weightSeriesPath.split('.')
@@ -313,7 +332,7 @@ def averageWeightedSeriesWithWildcards(requestContext, avgSeriesList, avgPathSub
       commonNodes = weightSeriesPathGroups[pathLen]
     else:
       commonNodes = {}
-    for i in range(len(pathComponents)):
+    for i in range(pathLen):
       if i in commonNodes:
         commonNodes[i].add(pathComponents[i])
       else:
@@ -321,10 +340,12 @@ def averageWeightedSeriesWithWildcards(requestContext, avgSeriesList, avgPathSub
     weightSeriesPathGroups[pathLen] = commonNodes
 
   # Take the compacted pathExpression map and translate each group
-  # to a pathExpression string and evaluate/fetch it.
+  # to a pathExpression string and evaluate/fetch it. In the previous
+  # example we would compact the weightSeriesPathGroups values to two
+  # pathExpressions "{x,y}.{a,b}.count" and "{x,y}.{a,b}.k.count".
   for weightSeriesPathGroup in weightSeriesPathGroups.values():
     weightSeriesPathExpressionNodes = []
-    for nodes in weightSeriesPathGroup.values():
+    for _, nodes in sorted(weightSeriesPathGroup.items()):
       if len(nodes) > 1:
         nodeStr = '{%s}' % ','.join(nodes)
         weightSeriesPathExpressionNodes.append(nodeStr)
@@ -336,7 +357,8 @@ def averageWeightedSeriesWithWildcards(requestContext, avgSeriesList, avgPathSub
         for wildcardKey in companionWildcardMap[w.name]:
           wildcardSeries[wildcardKey][w.name]['weight'] = w
 
-  # Generate a weighted average series for each wildcard key.
+  # Generate a weighted average series for each wildcard key. Following the
+  # above example there would be two keys, "a.k.mean" and "b.k.mean2".
   res = []
   for wildcardKey, groupedSeries in wildcardSeries.items():
     weightedAvgSeries = weightedAverageReducer(requestContext, groupedSeries.values())
